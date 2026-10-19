@@ -268,6 +268,27 @@ class VerifierTests(unittest.TestCase):
         self.assertEqual(
             check(claim3, rcpt, resolve18)["verdict"], "MISMATCH")
 
+    def test_large_amounts_are_compared_exactly(self):
+        # 100,000,000,000.000000000000000499 tokens at 18 dp is 30 digits,
+        # more than Decimal's default 28-digit context holds.
+        moved = 100000000000000000000000000499
+        rcpt = receipt([transfer_log(TKA, TKC, DEST, moved)])
+
+        def verdict(amount):
+            claim = make_claim(expected=[
+                {"contract": TKA, "direction": "in", "amount": amount},
+            ])
+            return check(claim, rcpt, resolve18)
+
+        exact = verdict("100000000000.000000000000000499")
+        self.assertEqual(exact["verdict"], "MATCH", exact["notes"])
+        self.assertEqual(exact["tokens"][0]["moved"],
+                         "100000000000.000000000000000499")
+        self.assertEqual(
+            verdict("100000000000.000000000000000")["verdict"], "MATCH")
+        self.assertEqual(
+            verdict("100000000000.000000000000001")["verdict"], "MISMATCH")
+
     # -- integration: claim #4 against the live chain -------------------
     def test_claim_004_against_live_chain(self):
         try:

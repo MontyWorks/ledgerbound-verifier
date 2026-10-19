@@ -39,7 +39,7 @@ Standard library only. Usage:
 import json
 import sys
 import urllib.request
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
 # A browser-like user agent: this RPC endpoint answers 403 to the default
@@ -114,12 +114,33 @@ def fetch_receipt(tx_hash):
     return receipt
 
 
+def wei_to_units(wei, decimals):
+    """Convert an integer token amount to units exactly.
+
+    Built from the digit tuple rather than by division, so the result is
+    never rounded to the default 28-digit Decimal context. Trailing
+    fractional zeros are dropped, as an exact division would drop them.
+    """
+    if wei == 0:
+        return Decimal(0)
+    sign, digits, exponent = Decimal(wei).as_tuple()
+    digits, exponent = list(digits), exponent - decimals
+    while exponent < 0 and len(digits) > 1 and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    return Decimal((sign, tuple(digits), exponent))
+
+
 def quantize_to_claimed(amount, claimed_str):
     """Round a Decimal to the precision written in the claim string."""
     claimed = Decimal(claimed_str)
     dp = -claimed.as_tuple().exponent if claimed.as_tuple().exponent < 0 else 0
     quantum = Decimal(1).scaleb(-dp)
-    return amount.quantize(quantum, rounding=ROUND_HALF_UP), dp
+    with localcontext() as ctx:
+        # Enough digits for the integer part plus the claimed decimals, so
+        # quantize does not raise InvalidOperation on large amounts.
+        ctx.prec = max(ctx.prec, max(amount.adjusted(), 0) + dp + 2)
+        return amount.quantize(quantum, rounding=ROUND_HALF_UP), dp
 
 
 def scan_movements(receipt, destination):
@@ -276,7 +297,7 @@ def check(claim, receipt, resolve_fn):
                 ["could not read the token contract %s: %s; refusing to "
                  "assume decimals" % (contract, exc)],
                 block_actual=block_actual)
-        moved = Decimal(moved_wei) / (Decimal(10) ** decimals)
+        moved = wei_to_units(moved_wei, decimals)
         try:
             rounded, dp = quantize_to_claimed(moved, claimed_str)
         except Exception:
